@@ -1,3 +1,5 @@
+use std::ops::{Bound, Range, RangeBounds};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Element {
     name: String,
@@ -94,6 +96,60 @@ where
     map(pair(parser1, parser2), |(_left, right)| right)
 }
 
+fn range_bound<'a, P, A, R>(parser: P, range: R) -> impl Parser<'a, Vec<A>>
+where
+    P: Parser<'a, A>,
+    R: RangeBounds<usize>,
+{
+    move |mut input| {
+        let mut result = Vec::new();
+
+        match range.start_bound() {
+            Bound::Included(start) => {
+                for _ in 0..*start {
+                    if let Ok((next_input, first_item)) = parser.parse(input) {
+                        input = next_input;
+                        result.push(first_item);
+                    } else {
+                        return Err(input);
+                    }
+                }
+
+                while let Ok((next_input, next_item)) = parser.parse(input) {
+                    if let Bound::Included(end) = range.end_bound() {
+                        if (result.len() + 1) > *end {
+                            return Err(input);
+                        }
+                    } else if let Bound::Excluded(end) = range.end_bound() {
+                        if (result.len() + 2) > *end {
+                            return Err(input);
+                        }
+                    }
+                    input = next_input;
+                    result.push(next_item);
+                }
+
+                Ok((input, result))
+            }
+            _ => Err(input),
+        }
+    }
+}
+
+fn one_or_more<'a, P, A>(parser: P) -> impl Parser<'a, Vec<A>>
+where
+    P: Parser<'a, A>,
+{
+    range_bound(parser, 1..)
+}
+
+fn zero_or_more<'a, P, A>(parser: P) -> impl Parser<'a, Vec<A>>
+where
+    P: Parser<'a, A>,
+{
+    range_bound(parser, 0..)
+}
+
 #[test]
 fn literal_parser() {
     let parse_joe = match_literal("Hello Joe!");
@@ -146,4 +202,38 @@ fn right_combinator() {
     );
     assert_eq!(Err("oops"), tag_opener.parse("oops"));
     assert_eq!(Err("!oops"), tag_opener.parse("<!oops"));
+}
+
+#[test]
+fn one_or_more_combinator() {
+    let parser = one_or_more(match_literal("ha"));
+    assert_eq!(Ok(("", vec![(), (), ()])), parser.parse("hahaha"));
+    assert_eq!(Err("ahah"), parser.parse("ahah"));
+    assert_eq!(Err(""), parser.parse(""));
+}
+
+#[test]
+fn zero_or_more_combinator() {
+    let parser = zero_or_more(match_literal("ha"));
+    assert_eq!(Ok(("", vec![(), (), ()])), parser.parse("hahaha"));
+    assert_eq!(Ok(("ahah", vec![])), parser.parse("ahah"));
+    assert_eq!(Ok(("", vec![])), parser.parse(""));
+}
+
+#[test]
+fn five_to_six_combinator() {
+    let parser = range_bound(match_literal("ha"), 5..=6);
+    assert_eq!(
+        Ok(("", vec![(), (), (), (), ()])),
+        parser.parse("hahahahaha")
+    );
+    assert_eq!(Err(""), parser.parse(""));
+    assert_eq!(
+        Ok(("", vec![(), (), (), (), (), ()])),
+        parser.parse("hahahahahaha")
+    );
+    assert_eq!(Err("ha"), parser.parse("hahahahahahaha"));
+
+    let parser = range_bound(match_literal("ha"), 5..7);
+    assert_eq!(Err("ha"), parser.parse("hahahahahahaha"));
 }
