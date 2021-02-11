@@ -150,6 +150,61 @@ where
     range_bound(parser, 0..)
 }
 
+fn any_char(input: &str) -> ParseResult<char> {
+    match input.chars().next() {
+        Some(next) => Ok((&input[next.len_utf8()..], next)),
+        _ => Err(input),
+    }
+}
+
+fn pred<'a, P, A, F>(parser: P, predicate: F) -> impl Parser<'a, A>
+where
+    P: Parser<'a, A>,
+    F: Fn(&A) -> bool,
+{
+    move |input| {
+        if let Ok((next_input, value)) = parser.parse(input) {
+            if predicate(&value) {
+                return Ok((next_input, value));
+            }
+        }
+        Err(input)
+    }
+}
+
+fn whitespace_char<'a>() -> impl Parser<'a, char> {
+    pred(any_char, |c| c.is_whitespace())
+}
+
+fn space1<'a>() -> impl Parser<'a, Vec<char>> {
+    one_or_more(whitespace_char())
+}
+
+fn space0<'a>() -> impl Parser<'a, Vec<char>> {
+    zero_or_more(whitespace_char())
+}
+
+fn quoted_string<'a>() -> impl Parser<'a, String> {
+    map(
+        right(
+            match_literal("\""),
+            left(
+                zero_or_more(pred(any_char, |c| *c != '"')),
+                match_literal("\""),
+            ),
+        ),
+        |chars| chars.into_iter().collect(),
+    )
+}
+
+fn attribute_pair<'a>() -> impl Parser<'a, (String, String)> {
+    pair(identifier, right(match_literal("="), quoted_string()))
+}
+
+fn attributes<'a>() -> impl Parser<'a, Vec<(String, String)>> {
+    zero_or_more(right(space1(), attribute_pair()))
+}
+
 #[test]
 fn literal_parser() {
     let parse_joe = match_literal("Hello Joe!");
@@ -236,4 +291,33 @@ fn five_to_six_combinator() {
 
     let parser = range_bound(match_literal("ha"), 5..7);
     assert_eq!(Err("ha"), parser.parse("hahahahahahaha"));
+}
+
+#[test]
+fn predicate_combinator() {
+    let parser = pred(any_char, |c| *c == 'o');
+    assert_eq!(Ok(("mg", 'o')), parser.parse("omg"));
+    assert_eq!(Err("lol"), parser.parse("lol"));
+}
+
+#[test]
+fn quoted_string_parser() {
+    assert_eq!(
+        Ok(("", "Hello Joe!".to_string())),
+        quoted_string().parse("\"Hello Joe!\"")
+    );
+}
+
+#[test]
+fn attribute_parser() {
+    assert_eq!(
+        Ok((
+            "",
+            vec![
+                ("one".to_string(), "1".to_string()),
+                ("two".to_string(), "2".to_string())
+            ]
+        )),
+        attributes().parse(" one=\"1\" two=\"2\"")
+    );
 }
